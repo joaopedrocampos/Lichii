@@ -1352,13 +1352,22 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
             continue;
         }
         ++graphics_records;
-        const auto key = PipelineRecordKey<GraphicsPipelineCacheKey>(record.payload);
+        auto key = PipelineRecordKey<GraphicsPipelineCacheKey>(record.payload);
         if (!key) {
             unreadable(record, "Graphics pipeline record without a key");
             continue;
         }
         const size_t index = records.size();
         records.push_back(&record);
+        // The used lists hold the hash of the key as it was recorded.
+        const u64 stored_hash = key->Hash();
+        // A record made on a driver with dynamic logic op (a shared shader cache from another
+        // GPU) is rebuilt with a static one when this device lacks it, as the old cache did:
+        // this device's own keys leave the static logic op fields at zero, like those records.
+        if (key->state.extended_dynamic_state_2_logic_op != 0 &&
+            !dynamic_features.has_extended_dynamic_state_2_logic_op) {
+            key->state.extended_dynamic_state_2_logic_op.Assign(0);
+        }
         if (!KeyFitsDevice(*key)) {
             continue;
         }
@@ -1366,9 +1375,10 @@ void PipelineCache::LoadPipelinesV2(u64 title_id,
         if (!disk_pipelines.insert(hash).second) {
             continue;
         }
-        if (PreloadAllPipelines() || (used_pipelines.empty()
-                                          ? queued_graphics < MaxPipelinesWithoutUsedList
-                                          : used_pipelines.contains(hash))) {
+        if (PreloadAllPipelines() ||
+            (used_pipelines.empty() ? queued_graphics < MaxPipelinesWithoutUsedList
+                                    : used_pipelines.contains(hash) ||
+                                          used_pipelines.contains(stored_hash))) {
             ++queued_graphics;
             boot_graphics.emplace_back(index, *key);
             continue;
